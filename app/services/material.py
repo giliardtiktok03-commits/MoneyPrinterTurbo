@@ -155,6 +155,11 @@ def _material_source_record(item: MaterialInfo, local_path: str) -> dict[str, An
         record["asset_id"] = str(asset_id)
     if source_page:
         record["source_page"] = source_page
+    if record["provider"] == "wikimedia":
+        for field in ("license", "license_url", "attribution", "decision", "checked_at"):
+            value = source.get(field)
+            if isinstance(value, str) and value.strip():
+                record[field] = value.strip()
 
     creator = _creator_info(source.get("creator"))
     if creator:
@@ -2358,6 +2363,150 @@ def _select_materials_until_duration(
     return selected
 
 
+def _render_wikimedia_candidates(
+    *,
+    search_term: str,
+    clip_duration: int,
+    image_motion: ImageMotion,
+    material_directory: str,
+    audit: list[dict[str, Any]],
+) -> tuple[str, MaterialInfo] | None:
+    """Trial Commons image search/render; never silently use review-only licenses."""
+    from app.services import wikimedia_commons
+
+    candidates = wikimedia_commons.search_images(search_term)
+    audit.extend(candidates)
+    for candidate in candidates:
+        if candidate["decision"] != "AUTO_APPROVED":
+            continue
+        raw_bytes = wikimedia_commons.download_approved_image(candidate)
+        if not raw_bytes:
+            continue
+        try:
+            image_path, width, height = _save_openai_image_file(
+                raw_bytes, material_directory
+            )
+            video_path = video.render_image_zoom_video(
+                image_path, clip_duration, image_motion=image_motion
+            )
+        except (OSError, ValueError, _OpenAIImageDecodeError) as exc:
+            logger.warning(
+                f"skip invalid Commons image: {type(exc).__name__}: {exc}"
+            )
+            continue
+        item = MaterialInfo(
+            provider="wikimedia",
+            url=candidate["image_url"],
+            duration=clip_duration,
+            source_info={
+                "provider": "wikimedia",
+                "asset_id": candidate["asset_id"],
+                "search_term": search_term,
+                "source_page": candidate["source_page"],
+                "license": candidate["license"],
+                "license_url": candidate["license_url"],
+                "creator": candidate["artist"],
+                "attribution": candidate["attribution"],
+                "decision": candidate["decision"],
+                "checked_at": candidate["checked_at"],
+                "rendition": {"width": width, "height": height},
+            },
+        )
+        return video_path, item
+    return None
+
+
+def _download_videos_wikimedia_trial(
+    *,
+    task_id: str,
+    search_terms: List[str],
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+    image_motion: ImageMotion,
+    source: str,
+    video_aspect: VideoAspect,
+) -> List[str]:
+    """Experimental Commons-only or ordered stock/Commons mode.
+
+    The optional paid AI source is deliberately not invoked automatically.
+    A later opt-in can support the paid last resort after explicit user consent.
+    """
+    from app.services import wikimedia_commons
+
+    if not material_directory:
+        material_directory = utils.task_dir(task_id)
+    os.makedirs(material_directory, exist_ok=True)
+    paths: List[str] = []
+    sources: list[dict[str, Any]] = []
+    audit: list[dict] = []
+    total = 0.0
+    ordered_stock = (
+        (
+            ("pexels", search_videos_pexels),
+            ("pixabay", search_videos_pixabay),
+            ("coverr", search_videos_coverr),
+        )
+        if source == "auto" else ()
+    )
+    for term in search_terms:
+        if total >= audio_duration:
+            break
+        resolved = False
+        for stock_provider, stock_search in ordered_stock:
+            try:
+                # A missing stock API key is not a failure of the entire video.
+                if not config.app.get(f"{stock_provider}_api_keys"):
+                    continue
+                items = _search_videos_with_cache(
+                    provider=stock_provider, search_videos=stock_search,
+                    search_term=term, minimum_duration=max_clip_duration,
+                    video_aspect=video_aspect,
+                )
+            except Exception as exc:
+                logger.warning(f"auto source {stock_provider} failed: {type(exc).__name__}")
+                continue
+            for item in items:
+                try:
+                    saved = save_video(video_url=item.url, save_dir=material_directory)
+                except Exception as exc:
+                    logger.warning(f"failed stock download: {type(exc).__name__}")
+                    saved = ""
+                if saved:
+                    paths.append(saved)
+                    sources.append(_material_source_record(item, saved))
+                    total += min(item.duration, max_clip_duration)
+                    resolved = True
+                    break
+            if resolved:
+                break
+        if resolved:
+            continue
+        material = _render_wikimedia_candidates(
+            search_term=term,
+            clip_duration=max_clip_duration,
+            image_motion=image_motion,
+            material_directory=material_directory,
+            audit=audit,
+        )
+        if material:
+            saved, item = material
+            paths.append(saved)
+            sources.append(_material_source_record(item, saved))
+            total += min(item.duration, max_clip_duration)
+            continue
+        logger.warning(f"no eligible stock/Commons material for {term!r}")
+    try:
+        wikimedia_commons.save_audit(utils.task_dir(task_id), audit)
+    except OSError as exc:
+        logger.error(f"failed to write Wikimedia audit: {exc}")
+        # Historical material must not silently lose its audit trail.
+        if audit:
+            raise
+    _persist_material_sources(task_id, sources)
+    return paths
+
+
 def download_videos(
     task_id: str,
     search_terms: List[str],
@@ -2407,6 +2556,17 @@ def download_videos(
     elif material_directory and not os.path.isdir(material_directory):
         material_directory = ""
 
+    if source in {"wikimedia", "auto"}:
+        return _download_videos_wikimedia_trial(
+            task_id=task_id,
+            search_terms=search_terms,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+            image_motion=image_motion,
+            source=source,
+            video_aspect=video_aspect,
+        )
     if source == "infistar":
         return _download_videos_infistar_on_demand(
             task_id=task_id, search_terms=search_terms, video_aspect=video_aspect,
