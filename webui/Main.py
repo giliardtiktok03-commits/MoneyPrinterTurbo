@@ -134,7 +134,7 @@ LOOMLOOM_MAX_POLL_FAILURES = 5
 # 火山引擎、无限星河排列；其余服务随后展示。这样两个入口的顺序一致，同时
 # 不改变 config.toml、历史任务和 API 请求中的字段语义，旧用户无需迁移配置。
 VIDEO_SOURCE_GROUPS = {
-    "stock_video": ("pexels", "pixabay", "coverr"),
+    "stock_video": ("auto", "pexels", "pixabay", "coverr", "wikimedia"),
     "ai_video": (
         "metaso_minimax",
         "ofox",
@@ -6035,6 +6035,8 @@ def _render_video_settings(panel, params):
                 (tr("Random"), "random"),
             ]
             video_source_labels = {
+                "auto": "Automatic: Pexels > Pixabay > Coverr > Wikimedia",
+                "wikimedia": "Wikimedia Commons (historical images)",
                 "pexels": tr("Pexels"),
                 "pixabay": tr("Pixabay"),
                 "coverr": tr("Coverr"),
@@ -6241,7 +6243,7 @@ def _render_video_settings(panel, params):
                 "ui", "video_fit_mode", params.video_fit_mode.value
             )
 
-            if params.video_source in {"local", "openai_image", "codex_image"}:
+            if params.video_source in {"local", "openai_image", "codex_image", "wikimedia", "auto"}:
                 image_motion_labels = {
                     ImageMotion.static.value: tr("Static Image"),
                     ImageMotion.zoom.value: tr("Slow Zoom"),
@@ -6365,7 +6367,7 @@ def _render_video_settings(panel, params):
                 _set_runtime_config("app", "video_codec", selected_video_codec)
 
             concurrency_options = [1, 2, 4, 6, 8]
-            if params.video_source in {"pexels", "pixabay", "coverr"}:
+            if params.video_source in {"pexels", "pixabay", "coverr", "wikimedia", "auto"}:
                 selected_material_concurrency = stable_selectbox(
                     tr("Material Concurrency"),
                     options=concurrency_options,
@@ -9056,9 +9058,11 @@ def _render_generation_controls(
         if params.video_source not in [
             "infistar",
             "jalapeno",
+            "auto",
             "pexels",
             "pixabay",
             "coverr",
+            "wikimedia",
             "wavespeed",
             "volcengine_seedance",
             "ofox",
