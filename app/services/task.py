@@ -100,7 +100,7 @@ _VIDEO_MUSIC_PROVIDERS = {
 
 
 _SUPPORTED_VIDEO_SOURCES = frozenset({
-    "pexels", "pixabay", "coverr", "local", "wavespeed",
+    "pexels", "pixabay", "coverr", "wikimedia", "auto", "local", "wavespeed",
     "volcengine_seedance", "ofox", "metaso_minimax", "muapi",
     "loomloom", "openai_image", "codex_image", "infistar", "jalapeno",
 })
