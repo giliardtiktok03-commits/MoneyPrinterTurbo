@@ -83,3 +83,28 @@ def test_commons_audit_persists(tmp_path):
     path = commons.save_audit(str(tmp_path), [{"decision": "NEEDS_REVIEW"}])
     assert '"NEEDS_REVIEW"' in (tmp_path / "wikimedia-audit.json").read_text()
     assert path.endswith("wikimedia-audit.json")
+
+
+def test_commons_cc0_with_required_attribution_needs_review():
+    decision, reason = commons._classify({
+        "LicenseShortName": "CC0",
+        "LicenseUrl": commons.CC0_URL,
+        "AttributionRequired": "true",
+    })
+    assert decision == "NEEDS_REVIEW"
+    assert "attribution" in reason.lower()
+
+
+def test_commons_cc0_with_conflicting_copyright_needs_review():
+    decision, reason = commons._classify({
+        "LicenseShortName": "CC0",
+        "LicenseUrl": commons.CC0_URL,
+        "Copyrighted": "true",
+    })
+    assert decision == "NEEDS_REVIEW"
+    assert "copyright" in reason.lower()
+
+
+def test_new_material_sources_pass_preflight():
+    from app.services import task
+    assert {"wikimedia", "auto"}.issubset(task._SUPPORTED_VIDEO_SOURCES)
