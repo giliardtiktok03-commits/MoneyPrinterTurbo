@@ -76,6 +76,13 @@ def _classify(meta: dict[str, str]) -> tuple[str, str]:
     license_url = meta.get("LicenseUrl", "").rstrip("/") + "/"
     restrictions = meta.get("Restrictions", "").strip()
     terms = meta.get("UsageTerms", "").lower()
+    attribution_required = meta.get("AttributionRequired", "").strip().lower()
+    copyrighted = meta.get("Copyrighted", "").strip().lower()
+    # Block contradictions even when the declared license is CC0.
+    if attribution_required in {"true", "yes", "1"}:
+        return "NEEDS_REVIEW", "Commons reports required attribution"
+    if copyrighted in {"true", "yes", "1"}:
+        return "NEEDS_REVIEW", "Commons reports copyright restrictions"
     if not license_name:
         return "NEEDS_REVIEW", "Missing license name"
     if re.search(r"(?:\bnc\b|non.?commercial|no.?deriv|all rights reserved)", license_name + " " + terms, re.I):
